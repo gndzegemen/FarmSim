@@ -23,11 +23,17 @@ public class FarmGrid : MonoBehaviour
     [SerializeField] private GameObject tilePrefab;
     [SerializeField] private Transform gridParent;
     
+    [Header("Farm Field Settings")]
+    [SerializeField] private Transform farmFieldParent; // Parent object for the brown farm field
+    [SerializeField] private string farmFieldTilePrefix = "3D_Tile_Farm_Field_01"; // Prefix for farm field tiles
+    [SerializeField] private Color plantableTileColor = new Color(0.5f, 0.3f, 0.1f); // Dark brown color for plantable tiles
+    
     [SerializeField] private List<CropData> cropDatabase = new List<CropData>();
     
     private CropTile[,] cropGrid;
     private GameObject[,] tileObjects;
     private SpriteRenderer[,] tileRenderers;
+    private Dictionary<CropType, Transform> cropTypeParents = new Dictionary<CropType, Transform>();
     
     private const string FARM_GRID_DATA_KEY = "FARM_GRID_DATA";
     
@@ -69,6 +75,9 @@ public class FarmGrid : MonoBehaviour
 
     private void Start()
     {
+        // Create parent transforms for each crop type
+        CreateCropTypeParents();
+        
         // Initialize or load the grid
         if (LoadGrid())
         {
@@ -82,6 +91,19 @@ public class FarmGrid : MonoBehaviour
         
         // Start updating crops
         InvokeRepeating("UpdateCrops", 1f, 1f);
+    }
+
+    private void CreateCropTypeParents()
+    {
+        // Create a parent transform for each crop type
+        foreach (CropType cropType in Enum.GetValues(typeof(CropType)))
+        {
+            if (cropType == CropType.None) continue;
+            
+            GameObject parentObj = new GameObject(cropType.ToString() + "Crops");
+            parentObj.transform.SetParent(transform);
+            cropTypeParents[cropType] = parentObj.transform;
+        }
     }
 
     private void InitializeCropDatabase()
@@ -120,24 +142,88 @@ public class FarmGrid : MonoBehaviour
         tileObjects = new GameObject[gridWidth, gridHeight];
         tileRenderers = new SpriteRenderer[gridWidth, gridHeight];
         
-        // Create grid of empty tiles
-        for (int x = 0; x < gridWidth; x++)
+        // Find farm field tiles if farmFieldParent is assigned
+        if (farmFieldParent != null)
         {
-            for (int y = 0; y < gridHeight; y++)
+            // Find all farm field tiles under the parent
+            for (int i = 0; i < farmFieldParent.childCount; i++)
             {
-                cropGrid[x, y] = new CropTile();
+                Transform tileParent = farmFieldParent.GetChild(i);
                 
-                // Create visual representation
-                Vector3 position = new Vector3(x * tileSize, y * tileSize, 0);
-                GameObject tileObj = Instantiate(tilePrefab, position, Quaternion.identity, gridParent);
-                tileObj.name = $"Tile_{x}_{y}";
+                // Extract coordinates from the tile name (assuming format like "tile01", "tile02", etc.)
+                string tileName = tileParent.name.ToLower();
+                int tileIndex = int.Parse(tileName.Replace("tile", ""));
                 
-                tileObjects[x, y] = tileObj;
-                tileRenderers[x, y] = tileObj.GetComponent<SpriteRenderer>();
+                // Calculate grid coordinates (assuming tiles are numbered from left to right, bottom to top)
+                int x = (tileIndex - 1) % gridWidth;
+                int y = (tileIndex - 1) / gridWidth;
                 
-                // Add click handler component if needed
-                TileClickHandler clickHandler = tileObj.AddComponent<TileClickHandler>();
-                clickHandler.Initialize(x, y);
+                if (x >= 0 && x < gridWidth && y >= 0 && y < gridHeight)
+                {
+                    // Find the farm field tile object
+                    Transform farmFieldTile = null;
+                    for (int j = 0; j < tileParent.childCount; j++)
+                    {
+                        if (tileParent.GetChild(j).name.Contains(farmFieldTilePrefix))
+                        {
+                            farmFieldTile = tileParent.GetChild(j);
+                            break;
+                        }
+                    }
+                    
+                    if (farmFieldTile != null)
+                    {
+                        // Set the farm field tile color to dark brown to indicate it's plantable
+                        Renderer tileRenderer = farmFieldTile.GetComponent<Renderer>();
+                        if (tileRenderer != null)
+                        {
+                            // Create a new material instance to avoid affecting other tiles
+                            Material tileMaterial = new Material(tileRenderer.material);
+                            tileMaterial.color = plantableTileColor;
+                            tileRenderer.material = tileMaterial;
+                        }
+                        
+                        // Create crop tile data
+                        cropGrid[x, y] = new CropTile();
+                        tileObjects[x, y] = farmFieldTile.gameObject;
+                        
+                        // Add sprite renderer for crop visuals if needed
+                        GameObject cropVisual = new GameObject("CropVisual_" + x + "_" + y);
+                        cropVisual.transform.position = farmFieldTile.position + new Vector3(0, 0.01f, 0); // Slightly above the tile
+                        cropVisual.transform.SetParent(farmFieldTile);
+                        
+                        SpriteRenderer spriteRenderer = cropVisual.AddComponent<SpriteRenderer>();
+                        spriteRenderer.sortingOrder = 1; // Ensure it renders above the tile
+                        tileRenderers[x, y] = spriteRenderer;
+                        
+                        // Add click handler component
+                        TileClickHandler clickHandler = farmFieldTile.gameObject.AddComponent<TileClickHandler>();
+                        clickHandler.Initialize(x, y);
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Fallback to the original grid creation if farmFieldParent is not assigned
+            for (int x = 0; x < gridWidth; x++)
+            {
+                for (int y = 0; y < gridHeight; y++)
+                {
+                    cropGrid[x, y] = new CropTile();
+                    
+                    // Create visual representation
+                    Vector3 position = new Vector3(x * tileSize, 0, y * tileSize);
+                    GameObject tileObj = Instantiate(tilePrefab, position, Quaternion.identity, gridParent);
+                    tileObj.name = $"Tile_{x}_{y}";
+                    
+                    tileObjects[x, y] = tileObj;
+                    tileRenderers[x, y] = tileObj.GetComponent<SpriteRenderer>();
+                    
+                    // Add click handler component
+                    TileClickHandler clickHandler = tileObj.AddComponent<TileClickHandler>();
+                    clickHandler.Initialize(x, y);
+                }
             }
         }
     }
@@ -148,6 +234,8 @@ public class FarmGrid : MonoBehaviour
         {
             for (int y = 0; y < gridHeight; y++)
             {
+                if (cropGrid[x, y] == null) continue;
+                
                 CropTile tile = cropGrid[x, y];
                 
                 if (tile.cropState == CropState.Seeded || tile.cropState == CropState.Growing)
@@ -186,6 +274,8 @@ public class FarmGrid : MonoBehaviour
 
     private void UpdateTileVisual(int x, int y)
     {
+        if (cropGrid[x, y] == null || tileRenderers[x, y] == null) return;
+        
         CropTile tile = cropGrid[x, y];
         SpriteRenderer renderer = tileRenderers[x, y];
         
@@ -222,6 +312,12 @@ public class FarmGrid : MonoBehaviour
             if (spriteIndex >= 0 && spriteIndex < cropData.growthStageSprites.Length)
             {
                 renderer.sprite = cropData.growthStageSprites[spriteIndex];
+                
+                // Make sure the crop visual is under the correct crop type parent
+                if (cropTypeParents.ContainsKey(tile.cropType))
+                {
+                    renderer.transform.SetParent(cropTypeParents[tile.cropType]);
+                }
             }
         }
     }
@@ -329,7 +425,7 @@ public class FarmGrid : MonoBehaviour
 
     private bool IsValidCoordinate(int x, int y)
     {
-        return x >= 0 && x < gridWidth && y >= 0 && y < gridHeight;
+        return x >= 0 && x < gridWidth && y >= 0 && y < gridHeight && cropGrid[x, y] != null;
     }
 
     public void SaveGrid()
@@ -344,6 +440,8 @@ public class FarmGrid : MonoBehaviour
         {
             for (int y = 0; y < gridHeight; y++)
             {
+                if (cropGrid[x, y] == null) continue;
+                
                 CropTile tile = cropGrid[x, y];
                 
                 SerializableCropTile serializableTile = new SerializableCropTile
@@ -382,31 +480,8 @@ public class FarmGrid : MonoBehaviour
             return false;
         }
         
-        // Initialize grid arrays
-        cropGrid = new CropTile[gridWidth, gridHeight];
-        tileObjects = new GameObject[gridWidth, gridHeight];
-        tileRenderers = new SpriteRenderer[gridWidth, gridHeight];
-        
-        // Create empty grid first
-        for (int x = 0; x < gridWidth; x++)
-        {
-            for (int y = 0; y < gridHeight; y++)
-            {
-                cropGrid[x, y] = new CropTile();
-                
-                // Create visual representation
-                Vector3 position = new Vector3(x * tileSize, y * tileSize, 0);
-                GameObject tileObj = Instantiate(tilePrefab, position, Quaternion.identity, gridParent);
-                tileObj.name = $"Tile_{x}_{y}";
-                
-                tileObjects[x, y] = tileObj;
-                tileRenderers[x, y] = tileObj.GetComponent<SpriteRenderer>();
-                
-                // Add click handler component
-                TileClickHandler clickHandler = tileObj.AddComponent<TileClickHandler>();
-                clickHandler.Initialize(x, y);
-            }
-        }
+        // Initialize grid first
+        InitializeGrid();
         
         // Load tile data
         foreach (SerializableCropTile serializableTile in serializableGrid.tiles)
@@ -451,7 +526,9 @@ public class FarmGrid : MonoBehaviour
         private void OnMouseDown()
         {
             // Handle tile click - can be expanded based on game state
-            CropTile tile = FarmGrid.Instance.cropGrid[x, y];
+            CropTile tile = FarmGrid.Instance.GetCropTile(x, y);
+            
+            if (tile == null) return;
             
             if (tile.cropState == CropState.Empty)
             {
